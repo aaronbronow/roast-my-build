@@ -26,15 +26,18 @@ const binBuffer2 = Buffer.from([1, 2, 3, 0, 7, 8, 9]);
 fs.writeFileSync(path.join(dir1, 'image.png'), binBuffer1);
 fs.writeFileSync(path.join(dir2, 'image.png'), binBuffer2);
 
-// 4. Deleted file
-fs.writeFileSync(path.join(dir1, 'deleted.txt'), 'Goodbye.');
-
-// 5. Added file
-fs.writeFileSync(path.join(dir2, 'added.txt'), 'Welcome.');
-
-// 6. Absolute path leak file (identical in both runs, but contains workspace path)
+// 4. Absolute path leak file
 fs.writeFileSync(path.join(dir1, 'bundle-with-path.js'), `(function() { console.log("loading from ${tmpDir}/src/app.js"); })()`);
 fs.writeFileSync(path.join(dir2, 'bundle-with-path.js'), `(function() { console.log("loading from ${tmpDir}/src/app.js"); })()`);
+
+// 5. Giant media asset (1MB size)
+const giantBuffer = Buffer.alloc(1024 * 1024 * 1.2, 'a'); // 1.2MB unoptimized file
+fs.writeFileSync(path.join(dir1, 'hero-background.png'), giantBuffer);
+fs.writeFileSync(path.join(dir2, 'hero-background.png'), giantBuffer);
+
+// 6. Secrets leak file
+fs.writeFileSync(path.join(dir1, 'config.js'), `const config = { firebaseKey: "AIzaSyAz9-bX382947df-keySecretExample" };`);
+fs.writeFileSync(path.join(dir2, 'config.js'), `const config = { firebaseKey: "AIzaSyAz9-bX382947df-keySecretExample" };`);
 
 // 7. Mock package-lock.json with duplicates
 const mockLock = {
@@ -63,16 +66,32 @@ const mockLock = {
 };
 fs.writeFileSync(path.join(tmpDir, 'package-lock.json'), JSON.stringify(mockLock, null, 2));
 
+// Mock build params
+const mockParams = {
+  duration1: 4500,  // 4.5 seconds
+  duration2: 6000,  // 6.0 seconds (33.3% jitter)
+  lockfileMutated: true,
+  buildLog: `
+    npm run build
+    [vite:css] warning: "@import" statement after other declarations is ignored
+    [vite:js] warning: deprecated option "output.format" was used
+    [webpack] warning: DeprecationWarning: Tapable.plugin is deprecated.
+  `
+};
+
 // Run analysis
 console.log('Running build analysis...');
 try {
-  const report = analyzeBuilds(dir1, dir2, tmpDir);
+  const report = analyzeBuilds(dir1, dir2, tmpDir, mockParams);
   console.log('\n--- Numerical Scores ---');
   console.log(`Determinism: ${report.determinismScore} (${report.determinismGrade})`);
   console.log(`Flab: ${report.flabScore} (${report.flabGrade})`);
   console.log(`Caching: ${report.cacheScore} (${report.cacheGrade})`);
   console.log(`Duplicates Count: ${report.duplicatesCount}`);
   console.log(`Absolute Path Leaks: ${report.leakedPathsCount}`);
+  console.log(`Secrets Leaked Count: ${report.leakedSecretsCount}`);
+  console.log(`Warnings Count: ${report.warningCount}`);
+  console.log(`Giant Assets Count: ${report.giantAssetsCount}`);
   
   console.log('\n--- Rendered Markdown Report ---');
   const markdown = renderPRComment(report);

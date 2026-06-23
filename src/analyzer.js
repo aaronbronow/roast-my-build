@@ -69,7 +69,6 @@ function listAllFiles(dir, baseDir = dir) {
   
   const list = fs.readdirSync(dir);
   for (const file of list) {
-    // Optimization: Skip known large/unrelated dirs
     if (file === 'node_modules' || file === '.git' || file === '.github') continue;
     
     const absolutePath = path.join(dir, file);
@@ -103,21 +102,19 @@ function formatBytes(bytes) {
 }
 
 /**
- * Generates diff between two files using git diff or system diff command, falling back to basic info.
+ * Generates diff between two files using system diff command, falling back to basic info.
  * @param {string} file1 
  * @param {string} file2 
  * @returns {string}
  */
 function generateDiff(file1, file2) {
   try {
-    // --strip-trailing-cr is helpful for cross-OS compatibility
     const diff = execSync(`diff -u --strip-trailing-cr "${file1}" "${file2}"`, {
       encoding: 'utf8',
       maxBuffer: 10 * 1024 * 1024 // 10MB
     });
     return diff;
   } catch (error) {
-    // diff returns exit code 1 if files differ, which throws in execSync
     if (error.stdout) {
       return error.stdout;
     }
@@ -248,6 +245,57 @@ function checkForAbsolutePaths(dir, workspaceDir) {
 }
 
 /**
+ * Scan files in directory for leaked secrets.
+ */
+const SECRETS_RULES = [
+  { name: 'Google API Key', regex: /AIzaSy[A-Za-z0-9-_]{30,40}/g },
+  { name: 'AWS Key ID', regex: /AKIA[0-9A-Z]{16}/g },
+  { name: 'GitHub Personal Token', regex: /gh[op]_[a-zA-Z0-9]{36,255}/g },
+  { name: 'Slack Webhook URL', regex: /https:\/\/hooks\.slack\.com\/services\/T[A-Z0-9_]+\/B[A-Z0-9_]+\/[A-Za-z0-9_]+/g },
+  { name: 'Generic Secret Variable', regex: /(?:api_key|apikey|secret_key|private_key|db_password)\s*[=:]\s*["'][A-Za-z0-9+/=_-]{16,}["']/gi }
+];
+
+function scanForSecrets(dir) {
+  const files = listAllFiles(dir);
+  const leaked = [];
+  for (const [relPath, info] of Object.entries(files)) {
+    if (info.isBinary) continue;
+    try {
+      const content = fs.readFileSync(info.absolutePath, 'utf8');
+      for (const rule of SECRETS_RULES) {
+        const matches = content.match(rule.regex);
+        if (matches) {
+          leaked.push({
+            file: relPath,
+            type: rule.name,
+            matches: Array.from(new Set(matches)).map(m => m.slice(0, 8) + '***') // Obfuscate secrets in report
+          });
+        }
+      }
+    } catch (e) {
+      // Ignore errors
+    }
+  }
+  return leaked;
+}
+
+/**
+ * Scan stdout logs for build compilation warning counts.
+ */
+function countWarnings(buildLog) {
+  if (!buildLog) return 0;
+  const lines = buildLog.split('\n');
+  let count = 0;
+  for (const line of lines) {
+    const lower = line.toLowerCase();
+    if (lower.includes('warning') || lower.includes('warn:') || lower.includes('warn ') || lower.includes('deprecation')) {
+      count++;
+    }
+  }
+  return count;
+}
+
+/**
  * Map numerical score to letter grade.
  * @param {number} score 
  * @returns {string}
@@ -266,28 +314,33 @@ function getGrade(score) {
  * @returns {string}
  */
 function getWittyRoast(results) {
-  const { determinismGrade, flabGrade, cacheGrade, duplicatesCount, sourcemapsFound, hasCaching, leakedPathsCount } = results;
+  const { 
+    determinismGrade, flabGrade, cacheGrade, 
+    duplicatesCount, sourcemapsFound, hasCaching, 
+    leakedPathsCount, leakedSecretsCount, warningCount, 
+    lockfileMutated, jitterPercent, giantAssetsCount 
+  } = results;
   
   const determinismRoasts = {
-    'A': "Your build is as stable as a bedrock. No variance, no secrets. Borrring.",
-    'B': "Almost deterministic, but some digital ghost is whispering timestamps or local paths into your assets.",
-    'C': "Your build changes more often than a toddler's mood. A few files are leaking state between runs.",
-    'D': "We mutated your environment and your build fell apart like wet cardboard. CDNs will cache nothing.",
+    'A': "Your build is as stable as bedrock. No variance, no secrets. Borrring.",
+    'B': "Almost deterministic, but some digital ghost is whispering timestamps or absolute paths into your assets.",
+    'C': "Your build changes more often than a toddler's mood. A few files are leaking local state between runs.",
+    'D': "We mutated your environment and your build fell apart. CDNs will cache nothing.",
     'F': "Determinism? More like dice-roll-ism. Your build is completely volatile. Are you compile-dating each file?"
   };
 
   const flabRoasts = {
     'A': "Clean, light, and optimized. Did you forget to install dependencies or are you just good?",
-    'B': "Reasonably trim, but there's a little winter weight here. Maybe run a quick sweep.",
+    'B': "Reasonably trim, but there's a little winter weight here.",
     'C': "Your build outputs look like they visited a buffet. Duplicate dependencies and bloated assets.",
     'D': "Your production bundles are thicker than a dictionary. Your users are downloading half of NPM.",
-    'F': "An absolute unit. Total flab. Lockfile duplication is out of control, and you are shipping sourcemaps directly to production."
+    'F': "An absolute unit. Total flab. Lockfile duplication is out of control, giant unoptimized assets everywhere, and you are shipping sourcemaps."
   };
 
   const cacheRoasts = {
     'A': "Caching configuration is top-tier. Zooming past installation phases.",
     'B': "Decent workflow cache, but could shave off a few more seconds.",
-    'C': "You're caching, but you could cache smarter. Or maybe your builds are just small anyway.",
+    'C': "You're caching, but you could cache smarter.",
     'D': "Workflow has zero caching configured. You are installing npm packages from scratch on every run. Greenpeace is crying.",
     'F': "No caching, slow builds, and complete resource waste. Think of the carbon footprint!"
   };
@@ -305,6 +358,18 @@ function getWittyRoast(results) {
   if (leakedPathsCount > 0) {
     specificPunches.push(`Baking absolute workspace paths (${leakedPathsCount} files) into assets makes your build leaks stickier than wet paint.`);
   }
+  if (leakedSecretsCount > 0) {
+    specificPunches.push(`Leaking ${leakedSecretsCount} credentials directly in your production bundle. Thanks for the API keys, the bots will put them to good use!`);
+  }
+  if (warningCount > 100) {
+    specificPunches.push(`Your build outputs ${warningCount} warnings. Your console log is a scroll of warning text taller than the Eiffel Tower.`);
+  }
+  if (lockfileMutated) {
+    specificPunches.push("Your build step mutated package-lock.json. Installing dependencies at compile time? That's a pipeline crime.");
+  }
+  if (giantAssetsCount > 0) {
+    specificPunches.push(`You have ${giantAssetsCount} giant uncompressed media assets. Your users' data plans are crying.`);
+  }
 
   const baseRoast = `${determinismRoasts[determinismGrade]} ${flabRoasts[flabGrade]} ${cacheRoasts[cacheGrade]}`;
   const punchline = specificPunches.length > 0 ? `\n\n**Special Roast:** ${specificPunches.join(" ")}` : "";
@@ -317,9 +382,12 @@ function getWittyRoast(results) {
  * @param {string} dir1 Standard build directory
  * @param {string} dir2 Mutated build directory
  * @param {string} workspaceDir Original project root for lockfile checks etc.
+ * @param {Object} rawParams Extra parameters captured during runtime (durations, logs, etc.)
  * @returns {Object} Complete report data
  */
-function analyzeBuilds(dir1, dir2, workspaceDir) {
+function analyzeBuilds(dir1, dir2, workspaceDir, rawParams = {}) {
+  const { duration1 = 0, duration2 = 0, buildLog = '', lockfileMutated = false } = rawParams;
+  
   const files1 = listAllFiles(dir1);
   const files2 = listAllFiles(dir2);
   
@@ -339,10 +407,17 @@ function analyzeBuilds(dir1, dir2, workspaceDir) {
   results.fileCount1 = Object.keys(files1).length;
   results.fileCount2 = Object.keys(files2).length;
   
+  const giantAssets = [];
+  const mediaExtensions = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.mp3', '.mp4', '.woff2']);
+
   for (const [relPath, info] of Object.entries(files1)) {
     results.totalSize1 += info.size;
     if (path.extname(relPath) === '.map') {
       results.sourcemapsFound = true;
+    }
+    const ext = path.extname(relPath).toLowerCase();
+    if (mediaExtensions.has(ext) && info.size > 500 * 1024) { // > 500KB
+      giantAssets.push({ path: relPath, size: info.size });
     }
   }
   for (const [relPath, info] of Object.entries(files2)) {
@@ -361,7 +436,6 @@ function analyzeBuilds(dir1, dir2, workspaceDir) {
       if (hash1 === hash2) {
         results.identical.push(relPath);
       } else {
-        // Collect difference details
         let diffContent = '';
         if (info1.isBinary || info2.isBinary) {
           diffContent = `Binary file changed. Size shifted from ${info1.size} bytes to ${info2.size} bytes.`;
@@ -386,40 +460,52 @@ function analyzeBuilds(dir1, dir2, workspaceDir) {
     }
   }
 
-  // Analyze package dependencies
+  // Analyze package dependencies and other checks
   const lockfileReport = analyzeLockfile(workspaceDir);
   const hasCaching = detectWorkflowCaching(workspaceDir);
   const leakedPaths = checkForAbsolutePaths(dir1, workspaceDir);
+  const leakedSecrets = scanForSecrets(dir1);
+  const warningCount = countWarnings(buildLog);
+
+  // Compute Build Speed Jitter
+  const jitterMs = Math.abs(duration1 - duration2);
+  const jitterPercent = duration1 > 0 ? parseFloat((jitterMs / duration1 * 100).toFixed(1)) : 0;
 
   // 1. Determinism Score Calculation
-  // Standard start is 100. Subtract points based on modified, added, or deleted files, and absolute path leaks.
+  // Standard start is 100. Subtract points based on modifications, leaks, secrets.
   let determinismScore = 100;
   const varianceCount = results.modified.length + results.added.length + results.removed.length;
   determinismScore -= (varianceCount * 15); // penalize 15 points per volatile file
   determinismScore -= (leakedPaths.length * 10); // penalize 10 points per leaked path file
+  determinismScore -= (leakedSecrets.length * 20); // penalize 20 points per leaked credential file
   if (determinismScore < 0) determinismScore = 0;
   const determinismGrade = getGrade(determinismScore);
 
   // 2. Flab Factor Score Calculation
   let flabScore = 100;
-  // Penalize for duplicate deps
   const duplicatesCount = Object.keys(lockfileReport.duplicates).length;
   flabScore -= (duplicatesCount * 3); // 3 points per duplicate package
-  // Penalize for file size (> 10MB is -10 points, > 50MB is -30 points)
   if (results.totalSize1 > 50 * 1024 * 1024) {
     flabScore -= 30;
   } else if (results.totalSize1 > 10 * 1024 * 1024) {
     flabScore -= 15;
   }
-  // Penalize for sourcemaps
   if (results.sourcemapsFound) {
     flabScore -= 15;
   }
+  flabScore -= (giantAssets.length * 5); // 5 points per giant image
   if (flabScore < 0) flabScore = 0;
   const flabGrade = getGrade(flabScore);
 
   // 3. Caching Score Calculation
   let cacheScore = hasCaching ? 95 : 40;
+  if (lockfileMutated) {
+    cacheScore -= 25; // penalize 25 points for mutating package-lock
+  }
+  if (jitterPercent > 25 && duration1 > 10000) {
+    cacheScore -= 15; // penalize 15 points if execution has high jitter
+  }
+  if (cacheScore < 0) cacheScore = 0;
   const cacheGrade = getGrade(cacheScore);
 
   return {
@@ -428,6 +514,15 @@ function analyzeBuilds(dir1, dir2, workspaceDir) {
     hasCaching,
     leakedPaths,
     leakedPathsCount: leakedPaths.length,
+    leakedSecrets,
+    leakedSecretsCount: leakedSecrets.length,
+    warningCount,
+    duration1,
+    duration2,
+    jitterPercent,
+    giantAssets,
+    giantAssetsCount: giantAssets.length,
+    lockfileMutated,
     determinismScore,
     determinismGrade,
     flabScore,
@@ -447,6 +542,13 @@ function renderPRComment(report) {
     metrics,
     lockfile,
     leakedPaths,
+    leakedSecrets,
+    warningCount,
+    duration1,
+    duration2,
+    jitterPercent,
+    giantAssets,
+    lockfileMutated,
     determinismGrade,
     flabGrade,
     cacheGrade,
@@ -457,21 +559,34 @@ function renderPRComment(report) {
   const varianceCount = metrics.modified.length + metrics.added.length + metrics.removed.length;
   
   let reprodDetails = 'All files are 100% identical between builds! 🧘';
-  if (varianceCount > 0 || leakedPaths.length > 0) {
+  if (varianceCount > 0 || leakedPaths.length > 0 || leakedSecrets.length > 0) {
     let detailsArr = [];
-    if (varianceCount > 0) detailsArr.push(`${varianceCount} volatile file(s) changed`);
-    if (leakedPaths.length > 0) detailsArr.push(`${leakedPaths.length} file(s) bake absolute paths`);
-    reprodDetails = `⚠️ ${detailsArr.join(' & ')}.`;
+    if (varianceCount > 0) detailsArr.push(`${varianceCount} volatile file(s)`);
+    if (leakedPaths.length > 0) detailsArr.push(`${leakedPaths.length} file(s) leak paths`);
+    if (leakedSecrets.length > 0) detailsArr.push(`${leakedSecrets.length} file(s) leak secrets`);
+    reprodDetails = `⚠️ ${detailsArr.join(', ')} found.`;
   }
   
   let flabDetails = `Output: ${totalSize} (${metrics.fileCount1} files).`;
-  if (lockfile.present) {
-    flabDetails += ` Lockfile has ${duplicatesCount} duplicate packages.`;
+  let flabExtras = [];
+  if (lockfile.present && duplicatesCount > 0) {
+    flabExtras.push(`${duplicatesCount} lockfile duplicate(s)`);
+  }
+  if (giantAssets.length > 0) {
+    flabExtras.push(`${giantAssets.length} giant asset(s)`);
+  }
+  if (flabExtras.length > 0) {
+    flabDetails += ` Found ${flabExtras.join(' & ')}.`;
   }
 
-  let cacheDetails = report.hasCaching 
-    ? '✅ Workflow uses cache actions.' 
-    : '❌ No step caching found in your workflows.';
+  let cacheDetails = `Duration: ${(duration1 / 1000).toFixed(1)}s (jitter: ${jitterPercent}%).`;
+  if (lockfileMutated) {
+    cacheDetails += ' ⚠️ Lockfile mutated!';
+  } else if (!report.hasCaching) {
+    cacheDetails += ' ❌ Caching disabled.';
+  } else {
+    cacheDetails += ' ✅ Caching enabled.';
+  }
 
   const roast = getWittyRoast(report);
 
@@ -485,10 +600,16 @@ function renderPRComment(report) {
   md += `${roast}\n\n`;
   
   md += `<details>\n`;
-  md += `<summary><b>🔍 Expand Fitness Breakdown & Diffs</b></summary>\n\n`;
+  md += `<summary><b>🔍 Expand Fitness Breakdown & Diagnostics</b></summary>\n\n`;
+
+  md += `#### ⏱️ Build & Logs Summary\n`;
+  md += `* **Standard Build Time**: \`${(duration1 / 1000).toFixed(2)} seconds\`\n`;
+  md += `* **Environment Shift Build Time**: \`${(duration2 / 1000).toFixed(2)} seconds\`\n`;
+  md += `* **Speed Jitter**: \`${jitterPercent}%\` variance between runs.\n`;
+  md += `* **Warnings Count**: \`${warningCount}\` compile-time warning(s) caught.\n\n`;
 
   if (metrics.modified.length > 0) {
-    md += `#### Non-Deterministic Files (Variance Detected)\n`;
+    md += `#### 🌀 Non-Deterministic Files (Variance Detected)\n`;
     md += `These files changed when built twice under minor environment mutations:\n\n`;
     
     for (const file of metrics.modified.slice(0, 5)) {
@@ -506,14 +627,36 @@ function renderPRComment(report) {
     }
   }
 
+  if (leakedSecrets.length > 0) {
+    md += `#### 🚨 Leaked Credentials & API Keys\n`;
+    md += `We scanned your build output and found strings resembling secrets. Do not publish these assets:\n\n`;
+    for (const leak of leakedSecrets.slice(0, 5)) {
+      md += `* **File**: \`${leak.file}\` | **Type**: \`${leak.type}\` | **Found**: \`${leak.matches.join(', ')}\`\n`;
+    }
+    if (leakedSecrets.length > 5) {
+      md += `*and ${leakedSecrets.length - 5} more leaked credentials.*\n\n`;
+    }
+  }
+
   if (leakedPaths.length > 0) {
     md += `#### 📂 Leaked Absolute Workspace Paths\n`;
-    md += `These files contain references to the hardcoded local workspace path (e.g. \`/home/runner/work...\`):\n\n`;
+    md += `These files contain references to your hardcoded local workspace directory (e.g. \`/home/runner/work...\`):\n\n`;
     for (const p of leakedPaths.slice(0, 8)) {
       md += `* \`${p}\`\n`;
     }
     if (leakedPaths.length > 8) {
       md += `*and ${leakedPaths.length - 8} more files.*\n\n`;
+    }
+  }
+
+  if (giantAssets.length > 0) {
+    md += `#### 🍔 Giant Media Assets (>500KB)\n`;
+    md += `These assets should be compressed or converted to modern web formats to reduce network payload:\n\n`;
+    for (const asset of giantAssets.slice(0, 8)) {
+      md += `* \`${asset.path}\` (${formatBytes(asset.size)})\n`;
+    }
+    if (giantAssets.length > 8) {
+      md += `*and ${giantAssets.length - 8} more giant assets.*\n\n`;
     }
   }
 
@@ -534,11 +677,20 @@ function renderPRComment(report) {
   if (varianceCount > 0) {
     wins.push(`Freeze build times by setting the environment variable \`SOURCE_DATE_EPOCH\` or disabling timestamps in your build config.`);
   }
+  if (leakedSecrets.length > 0) {
+    wins.push(`Remove API keys and secrets from source code. Load them dynamically using environment configurations.`);
+  }
   if (leakedPaths.length > 0) {
     wins.push(`Use relative pathing or replace \`__dirname\` references during bundling to prevent absolute path leakage.`);
   }
+  if (giantAssets.length > 0) {
+    wins.push(`Compress large media assets using imagemin, or convert them to WebP/AVIF formats.`);
+  }
   if (report.sourcemapsFound) {
     wins.push(`Do not ship \`.map\` files to production build directories. Exclude them in your webpack/vite configuration.`);
+  }
+  if (lockfileMutated) {
+    wins.push(`Do not run commands that modify dependencies (like \`npm install\` without \`--package-lock-only\` or \`npm build\` scripts that write back to files) during compiling.`);
   }
   if (duplicatesCount > 0) {
     wins.push(`Run \`npm dedupe\` to consolidate package versions in your lockfile.`);
@@ -563,26 +715,7 @@ module.exports = {
   listAllFiles,
   analyzeBuilds,
   renderPRComment,
-  checkForAbsolutePaths
+  checkForAbsolutePaths,
+  scanForSecrets,
+  countWarnings
 };
-
-// If run directly from CLI
-if (require.main === module) {
-  const args = process.argv.slice(2);
-  if (args.length < 2) {
-    console.error('Usage: node src/analyzer.js <build_dir1> <build_dir2> [workspace_dir]');
-    process.exit(1);
-  }
-  const dir1 = path.resolve(args[0]);
-  const dir2 = path.resolve(args[1]);
-  const workspace = args[2] ? path.resolve(args[2]) : process.cwd();
-  
-  try {
-    const report = analyzeBuilds(dir1, dir2, workspace);
-    const md = renderPRComment(report);
-    console.log(md);
-  } catch (error) {
-    console.error('Analysis failed:', error);
-    process.exit(1);
-  }
-}
