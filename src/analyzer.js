@@ -557,49 +557,34 @@ function renderPRComment(report) {
 
   const totalSize = formatBytes(metrics.totalSize1);
   const varianceCount = metrics.modified.length + metrics.added.length + metrics.removed.length;
-  let reprodDetails = '';
-  if (varianceCount === 0 && leakedPaths.length === 0 && leakedSecrets.length === 0) {
-    reprodDetails = '0 volatile files, 0 path leaks, 0 secret leaks.';
-  } else {
-    let detailsArr = [];
-    detailsArr.push(`${varianceCount} volatile file(s)`);
-    detailsArr.push(`${leakedPaths.length} path leak(s)`);
-    detailsArr.push(`${leakedSecrets.length} secret leak(s)`);
-    reprodDetails = `⚠️ ${detailsArr.join(' & ')}.`;
-  }
-  
-  let flabDetails = `Output: ${totalSize} (${metrics.fileCount1} files). `;
-  if (duplicatesCount === 0 && giantAssets.length === 0 && warningCount === 0) {
-    flabDetails += '0 duplicate packages, 0 giant assets, 0 warnings.';
-  } else {
-    let detailsArr = [];
-    if (duplicatesCount > 0) detailsArr.push(`${duplicatesCount} duplicate(s)`);
-    if (giantAssets.length > 0) detailsArr.push(`${giantAssets.length} giant asset(s)`);
-    if (warningCount > 0) detailsArr.push(`${warningCount} warning(s)`);
-    flabDetails += `Found ${detailsArr.join(' & ')}.`;
-  }
-
-  let cacheDuration = duration1 < 1000 ? '< 1.0s' : `${(duration1 / 1000).toFixed(1)}s (jitter: ${jitterPercent}%)`;
-  let cacheDetails = `Duration: ${cacheDuration}. `;
-  if (!lockfileMutated && report.hasCaching) {
-    cacheDetails += '0 lockfile mutations. Caching active.';
-  } else {
-    let detailsArr = [];
-    if (lockfileMutated) detailsArr.push('⚠️ lockfile mutated');
-    if (!report.hasCaching) detailsArr.push('❌ caching disabled');
-    cacheDetails += `${detailsArr.join(' & ')}.`;
-  }
+  let cacheDuration = duration1 < 1000 ? '< 1.0s' : `${(duration1 / 1000).toFixed(1)}s`;
+  let reprodStatus = determinismGrade === 'A' ? '🟢 Sterile' : '⚠️ Volatile';
+  let flabStatus = flabGrade === 'A' || flabGrade === 'B' ? '🟢 Lean' : '🍔 Plump';
+  let cacheStatus = cacheGrade === 'A' || cacheGrade === 'B' ? '🟢 Active' : '🏃 Sluggish';
 
   const roast = getWittyRoast(report);
 
-  let md = `## 🔥 CI Fitness Roast: Your Build is ...\n\n`;
-  md += `| Metric | Score | Status | Details |\n`;
+  let md = `## 🔥 CI Fitness Roast: Scorecard\n\n`;
+  md += `| Category | Grade | Status | Summary |\n`;
   md += `| :--- | :---: | :---: | :--- |\n`;
-  md += `| **Reproducibility (Determinism)** | **${determinismGrade}** | ${determinismGrade === 'A' ? '🟢 Sterile' : '⚠️ Volatile'} | ${reprodDetails} |\n`;
-  md += `| **Flab Factor (Bloat)** | **${flabGrade}** | ${flabGrade === 'A' || flabGrade === 'B' ? '🟢 Lean' : '🍔 Plump'} | ${flabDetails} |\n`;
-  md += `| **Caching Efficiency** | **${cacheGrade}** | ${cacheGrade === 'A' || cacheGrade === 'B' ? '🟢 Active' : '🏃 Sluggish'} | ${cacheDetails} |\n\n`;
+  md += `| **Reproducibility (Determinism)** | **${determinismGrade}** | ${reprodStatus} | ${varianceCount} volatile file(s) detected. |\n`;
+  md += `| **Flab Factor (Bloat)** | **${flabGrade}** | ${flabStatus} | Output size: ${totalSize} (${metrics.fileCount1} files). |\n`;
+  md += `| **Caching Efficiency** | **${cacheGrade}** | ${cacheStatus} | Base compile time: ${cacheDuration}. |\n\n`;
   
   md += `${roast}\n\n`;
+
+  md += `### 🔍 Detailed Audit Checklist\n\n`;
+  md += `| Audit Check | Status | Details |\n`;
+  md += `| :--- | :---: | :--- |\n`;
+  md += `| 🔄 **File Volatility** | ${varianceCount === 0 ? '🟢 Sterile' : '⚠️ Volatile'} | ${varianceCount === 0 ? '0 files changed between back-to-back compile runs.' : `${varianceCount} file(s) modified/added/removed between runs.`} |\n`;
+  md += `| 📂 **Absolute Path Leakage** | ${leakedPaths.length === 0 ? '🟢 Clean' : '⚠️ Leaking'} | ${leakedPaths.length === 0 ? 'No absolute workspace paths found in bundles.' : `${leakedPaths.length} file(s) bake hardcoded workspace paths.`} |\n`;
+  md += `| 🚨 **Credentials & Secrets** | ${leakedSecrets.length === 0 ? '🟢 Secure' : '🚨 Exposed'} | ${leakedSecrets.length === 0 ? 'No exposed API keys or secrets in assets.' : `Leaked ${leakedSecrets.length} API keys or secret tokens in assets!`} |\n`;
+  md += `| 📦 **Duplicate Dependencies** | ${duplicatesCount === 0 ? '🟢 Consolidated' : '🍔 Bloated'} | ${duplicatesCount === 0 ? '0 duplicate package versions in lockfile.' : `Found ${duplicatesCount} duplicate package versions in lockfile.`} |\n`;
+  md += `| 🖼️ **Giant Media Assets** | ${giantAssets.length === 0 ? '🟢 Optimized' : '🍔 Plump'} | ${giantAssets.length === 0 ? 'All media assets and images are under 500KB.' : `Found ${giantAssets.length} uncompressed assets exceeding 500KB.`} |\n`;
+  md += `| ⚠️ **Compile-Time Warnings** | ${warningCount === 0 ? '🟢 Clean' : '⚠️ Warning'} | ${warningCount === 0 ? '0 warnings found in build compilation logs.' : `Build logs output ${warningCount} compiler warning(s).`} |\n`;
+  md += `| 🔒 **Lockfile Mutations** | ${!lockfileMutated ? '🟢 Sterile' : '⚠️ Mutated'} | ${!lockfileMutated ? 'package-lock.json was not modified during compiling.' : 'package-lock.json was mutated during the build step!'} |\n`;
+  md += `| 🏃 **Action Step Caching** | ${report.hasCaching ? '🟢 Cached' : '❌ Uncached'} | ${report.hasCaching ? 'Dependency caching active in workflow configurations.' : 'Workflow does not cache node_modules or dependency locks.'} |\n`;
+  md += `| ⏱️ **Build Speed Stability** | ${jitterPercent <= 25 ? '🟢 Stable' : '⚠️ Erratic'} | ${duration1 < 1000 ? 'Execution time is sub-second (no jitter measured).' : `Build variance is ${jitterPercent}% (Standard: ${(duration1/1000).toFixed(1)}s vs Shifted: ${(duration2/1000).toFixed(1)}s).`} |\n\n`;
   
   md += `<details>\n`;
   md += `<summary><b>🔍 Expand Fitness Breakdown & Diagnostics</b></summary>\n\n`;
