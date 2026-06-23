@@ -575,11 +575,19 @@ function renderPRComment(report) {
   if (giantAssets.length > 0) {
     flabExtras.push(`${giantAssets.length} giant asset(s)`);
   }
+  if (warningCount > 0) {
+    flabExtras.push(`${warningCount} build warning(s)`);
+  }
   if (flabExtras.length > 0) {
     flabDetails += ` Found ${flabExtras.join(' & ')}.`;
   }
 
-  let cacheDetails = `Duration: ${(duration1 / 1000).toFixed(1)}s (jitter: ${jitterPercent}%).`;
+  let cacheDetails = '';
+  if (duration1 < 1000) {
+    cacheDetails = `Duration: < 1.0s.`;
+  } else {
+    cacheDetails = `Duration: ${(duration1 / 1000).toFixed(1)}s (jitter: ${jitterPercent}%).`;
+  }
   if (lockfileMutated) {
     cacheDetails += ' ⚠️ Lockfile mutated!';
   } else if (!report.hasCaching) {
