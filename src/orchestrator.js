@@ -111,7 +111,7 @@ function findPrecedingStepCommand(workspaceDir) {
       if (file.endsWith('.yml') || file.endsWith('.yaml')) {
         const filePath = path.join(workflowsDir, file);
         const content = fs.readFileSync(filePath, 'utf8');
-        if (content.includes('ci-roast') || content.includes('roast-my-build')) {
+        if (content.includes('ci-roast') || content.includes('roast-my-build') || content.includes('./')) {
           // Parse lines to locate the run block preceding our uses action
           const lines = content.split('\n');
           let steps = [];
@@ -127,7 +127,7 @@ function findPrecedingStepCommand(workspaceDir) {
             const indent = line.length - line.trimStart().length;
 
             if (inRunBlock) {
-              if (trimmed === '' || indent > runBlockIndent) {
+              if (trimmed === '' || indent >= runBlockIndent) {
                 runBlockLines.push(line.slice(runBlockIndent));
                 continue;
               } else {
@@ -178,7 +178,12 @@ function findPrecedingStepCommand(workspaceDir) {
               }
             }
           }
-          if (currentStep) steps.push(currentStep);
+          if (currentStep) {
+            if (inRunBlock) {
+              currentStep.run = runBlockLines.join('\n').trim();
+            }
+            steps.push(currentStep);
+          }
 
           for (let idx = 0; idx < steps.length; idx++) {
             const step = steps[idx];
