@@ -1,0 +1,29 @@
+name: "🔥 Dogfood CI Fitness Test"
+
+on:
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  roast-self:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run Build Step (Mock)
+        run: |
+          mkdir -p dist
+          echo "// Mock build generated output" > dist/bundle.js
+          echo "console.log('Build Timestamp: $(date)');" >> dist/bundle.js
+
+      - name: 🔥 Run Fitness Audit
+        uses: ./
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

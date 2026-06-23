@@ -1,0 +1,31 @@
+name: '🔥 Roast My Build (CI Fitness Test)'
+description: 'A fun, gamified GitHub Action that audits your build pipeline for reproducibility, lockfile flab, and caching efficiency.'
+author: 'The YAML Company'
+branding:
+  icon: 'zap'
+  color: 'orange'
+
+inputs:
+  build-command:
+    description: 'The exact build command to run (e.g. "npm run build"). If omitted, it will try to auto-detect the preceding run step in your workflow.'
+    required: false
+    default: ''
+  github-token:
+    description: 'The secret GITHUB_TOKEN to post/update the PR timeline comment.'
+    required: false
+    default: ''
+  pr-comment:
+    description: 'Whether to post/update a PR timeline comment.'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run CI Fitness Test
+      shell: bash
+      run: node ${{ github.action_path }}/src/orchestrator.js
+      env:
+        INPUT_BUILD_COMMAND: ${{ inputs.build-command }}
+        INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
+        INPUT_PR_COMMENT: ${{ inputs.pr-comment }}
