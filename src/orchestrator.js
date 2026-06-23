@@ -433,7 +433,8 @@ async function main() {
     duration1,
     duration2,
     buildLog: buildLog1,
-    lockfileMutated
+    lockfileMutated,
+    buildEnv: process.env
   });
   const markdown = renderPRComment(report);
 

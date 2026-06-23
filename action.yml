@@ -1,6 +1,6 @@
 name: '🔥 Roast My Build (CI Fitness Test)'
 description: 'A fun, gamified GitHub Action that audits your build pipeline for reproducibility, lockfile flab, and caching efficiency.'
-author: 'The YAML Company'
+author: 'Aaron Bronow'
 branding:
   icon: 'zap'
   color: 'orange'
@@ -11,7 +11,7 @@ inputs:
     required: false
     default: ''
   github-token:
-    description: 'The secret GITHUB_TOKEN to post/update the PR timeline comment.'
+    description: 'The secret GITHUB_TOKEN to post/update the PR timeline comment. If omitted, PR comments are skipped but local files and Step Summaries are still generated.'
     required: false
     default: ''
   pr-comment:

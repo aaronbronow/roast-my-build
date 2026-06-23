@@ -71,6 +71,9 @@ const mockParams = {
   duration1: 4500,  // 4.5 seconds
   duration2: 6000,  // 6.0 seconds (33.3% jitter)
   lockfileMutated: true,
+  buildEnv: {
+    OPENAI_API_KEY: 'sk-proj-mock123key'
+  },
   buildLog: `
     npm run build
     [vite:css] warning: "@import" statement after other declarations is ignored
@@ -92,6 +95,7 @@ try {
   console.log(`Secrets Leaked Count: ${report.leakedSecretsCount}`);
   console.log(`Warnings Count: ${report.warningCount}`);
   console.log(`Giant Assets Count: ${report.giantAssetsCount}`);
+  console.log(`Consulted LLMs: ${report.consultedLLMs.join(', ')}`);
   
   console.log('\n--- Rendered Markdown Report ---');
   const markdown = renderPRComment(report);

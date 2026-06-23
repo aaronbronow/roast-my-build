@@ -295,6 +295,31 @@ function countWarnings(buildLog) {
   return count;
 }
 
+const LLM_PROVIDERS = [
+  { name: 'OpenAI', envs: ['OPENAI_API_KEY'], keywords: ['api.openai.com', 'gpt-4', 'gpt-3.5', 'chatgpt'] },
+  { name: 'Gemini', envs: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'], keywords: ['generativelanguage.googleapis.com', 'gemini-1.5', 'gemini-pro'] },
+  { name: 'Anthropic', envs: ['ANTHROPIC_API_KEY'], keywords: ['api.anthropic.com', 'claude-3', 'claude-'] },
+  { name: 'Cohere', envs: ['COHERE_API_KEY'], keywords: ['api.cohere.ai', 'cohere.ai'] },
+  { name: 'Ollama', envs: ['OLLAMA_HOST'], keywords: ['localhost:11434', 'ollama'] },
+  { name: 'Groq', envs: ['GROQ_API_KEY'], keywords: ['api.groq.com', 'groq-'] },
+  { name: 'Mistral', envs: ['MISTRAL_API_KEY'], keywords: ['api.mistral.ai', 'mistral.ai'] },
+  { name: 'DeepSeek', envs: ['DEEPSEEK_API_KEY'], keywords: ['api.deepseek.com', 'deepseek-'] },
+  { name: 'Perplexity', envs: ['PERPLEXITY_API_KEY'], keywords: ['api.perplexity.ai', 'perplexity'] },
+  { name: 'HuggingFace', envs: ['HUGGINGFACE_API_KEY', 'HF_TOKEN'], keywords: ['api-infer.huggingface.co', 'huggingface.co/api'] }
+];
+
+function checkOracleConsultation(buildLog, env = {}) {
+  const consulted = [];
+  for (const provider of LLM_PROVIDERS) {
+    const envDetected = provider.envs.some(key => env[key] !== undefined && env[key] !== '');
+    const logDetected = buildLog && provider.keywords.some(kw => buildLog.toLowerCase().includes(kw.toLowerCase()));
+    if (envDetected || logDetected) {
+      consulted.push(provider.name);
+    }
+  }
+  return consulted;
+}
+
 /**
  * Map numerical score to letter grade.
  * @param {number} score 
@@ -318,7 +343,8 @@ function getWittyRoast(results) {
     determinismGrade, flabGrade, cacheGrade, 
     duplicatesCount, sourcemapsFound, hasCaching, 
     leakedPathsCount, leakedSecretsCount, warningCount, 
-    lockfileMutated, jitterPercent, giantAssetsCount 
+    lockfileMutated, jitterPercent, giantAssetsCount,
+    consultedLLMsCount
   } = results;
   
   const determinismRoasts = {
@@ -369,6 +395,9 @@ function getWittyRoast(results) {
   }
   if (giantAssetsCount > 0) {
     specificPunches.push(`You have ${giantAssetsCount} giant uncompressed media assets. Your users' data plans are crying.`);
+  }
+  if (consultedLLMsCount > 0) {
+    specificPunches.push(`Consulting the Oracle during compilation? What happens when Gemini starts hallucinating your CSS layout or OpenAI goes down mid-pipeline?`);
   }
 
   const baseRoast = `${determinismRoasts[determinismGrade]} ${flabRoasts[flabGrade]} ${cacheRoasts[cacheGrade]}`;
@@ -466,18 +495,23 @@ function analyzeBuilds(dir1, dir2, workspaceDir, rawParams = {}) {
   const leakedPaths = checkForAbsolutePaths(dir1, workspaceDir);
   const leakedSecrets = scanForSecrets(dir1);
   const warningCount = countWarnings(buildLog);
+  const buildEnv = rawParams.buildEnv || {};
+  const consultedLLMs = checkOracleConsultation(buildLog, buildEnv);
 
   // Compute Build Speed Jitter
   const jitterMs = Math.abs(duration1 - duration2);
   const jitterPercent = duration1 > 0 ? parseFloat((jitterMs / duration1 * 100).toFixed(1)) : 0;
 
   // 1. Determinism Score Calculation
-  // Standard start is 100. Subtract points based on modifications, leaks, secrets.
+  // Standard start is 100. Subtract points based on modifications, leaks, secrets, and LLM calls.
   let determinismScore = 100;
   const varianceCount = results.modified.length + results.added.length + results.removed.length;
   determinismScore -= (varianceCount * 15); // penalize 15 points per volatile file
   determinismScore -= (leakedPaths.length * 10); // penalize 10 points per leaked path file
   determinismScore -= (leakedSecrets.length * 20); // penalize 20 points per leaked credential file
+  if (consultedLLMs.length > 0) {
+    determinismScore -= 15; // penalize 15 points if they query LLMs during compile
+  }
   if (determinismScore < 0) determinismScore = 0;
   const determinismGrade = getGrade(determinismScore);
 
@@ -524,6 +558,8 @@ function analyzeBuilds(dir1, dir2, workspaceDir, rawParams = {}) {
     giantAssets,
     giantAssetsCount: giantAssets.length,
     lockfileMutated,
+    consultedLLMs,
+    consultedLLMsCount: consultedLLMs.length,
     determinismScore,
     determinismGrade,
     flabScore,
@@ -550,6 +586,7 @@ function renderPRComment(report) {
     jitterPercent,
     giantAssets,
     lockfileMutated,
+    consultedLLMs,
     determinismGrade,
     flabGrade,
     cacheGrade,
@@ -597,6 +634,7 @@ function renderPRComment(report) {
     cachingDetails = 'Workflow does not cache node_modules or dependency locks.';
   }
   md += `| 🏃 **Action Step Caching** | ${cachingStatus} | ${cachingDetails} |\n`;
+  md += `| 🔮 **Consulting the Oracle** | ${consultedLLMs.length === 0 ? '🟢 Independent' : '⚠️ Consulted'} | ${consultedLLMs.length === 0 ? 'Build did not consult any known LLM APIs.' : `Queried LLM APIs (${consultedLLMs.join(', ')}) during compilation!`} |\n`;
   const speedStatus = (jitterPercent <= 25 || duration1 < 1000) ? '🟢 Stable' : '⚠️ Erratic';
   md += `| ⏱️ **Build Speed Stability** | ${speedStatus} | ${duration1 < 1000 ? 'Execution time is sub-second (no jitter measured).' : `Build variance is ${jitterPercent}% (Standard: ${(duration1/1000).toFixed(1)}s vs Shifted: ${(duration2/1000).toFixed(1)}s).`} |\n\n`;
   
