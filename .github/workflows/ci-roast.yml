@@ -27,6 +27,8 @@ jobs:
         run: npm run build
 
       - name: 🔥 Run Roast my Build
-        uses: aaronbronow/roast-my-build@v0.1.0
+        # In your own project, replace "uses: ./" with:
+        # uses: aaronbronow/roast-my-build@v0.1.0
+        uses: ./
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
