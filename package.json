@@ -1,0 +1,10 @@
+{
+  "name": "roast-my-build",
+  "version": "0.1.0",
+  "description": "Roast your build action",
+  "main": "src/orchestrator.js",
+  "scripts": {
+    "build": "mkdir -p dist && echo '// Mock build generated output' > dist/bundle.js && echo \"console.log('Build Timestamp: ' + new Date().toISOString());\" >> dist/bundle.js"
+  },
+  "dependencies": {}
+}
