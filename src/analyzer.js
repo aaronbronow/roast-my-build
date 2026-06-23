@@ -557,43 +557,37 @@ function renderPRComment(report) {
 
   const totalSize = formatBytes(metrics.totalSize1);
   const varianceCount = metrics.modified.length + metrics.added.length + metrics.removed.length;
-  
-  let reprodDetails = 'All files are 100% identical between builds! 🧘';
-  if (varianceCount > 0 || leakedPaths.length > 0 || leakedSecrets.length > 0) {
+  let reprodDetails = '';
+  if (varianceCount === 0 && leakedPaths.length === 0 && leakedSecrets.length === 0) {
+    reprodDetails = '0 volatile files, 0 path leaks, 0 secret leaks.';
+  } else {
     let detailsArr = [];
-    if (varianceCount > 0) detailsArr.push(`${varianceCount} volatile file(s)`);
-    if (leakedPaths.length > 0) detailsArr.push(`${leakedPaths.length} file(s) leak paths`);
-    if (leakedSecrets.length > 0) detailsArr.push(`${leakedSecrets.length} file(s) leak secrets`);
-    reprodDetails = `⚠️ ${detailsArr.join(', ')} found.`;
+    detailsArr.push(`${varianceCount} volatile file(s)`);
+    detailsArr.push(`${leakedPaths.length} path leak(s)`);
+    detailsArr.push(`${leakedSecrets.length} secret leak(s)`);
+    reprodDetails = `⚠️ ${detailsArr.join(' & ')}.`;
   }
   
-  let flabDetails = `Output: ${totalSize} (${metrics.fileCount1} files).`;
-  let flabExtras = [];
-  if (lockfile.present && duplicatesCount > 0) {
-    flabExtras.push(`${duplicatesCount} lockfile duplicate(s)`);
-  }
-  if (giantAssets.length > 0) {
-    flabExtras.push(`${giantAssets.length} giant asset(s)`);
-  }
-  if (warningCount > 0) {
-    flabExtras.push(`${warningCount} build warning(s)`);
-  }
-  if (flabExtras.length > 0) {
-    flabDetails += ` Found ${flabExtras.join(' & ')}.`;
+  let flabDetails = `Output: ${totalSize} (${metrics.fileCount1} files). `;
+  if (duplicatesCount === 0 && giantAssets.length === 0 && warningCount === 0) {
+    flabDetails += '0 duplicate packages, 0 giant assets, 0 warnings.';
+  } else {
+    let detailsArr = [];
+    if (duplicatesCount > 0) detailsArr.push(`${duplicatesCount} duplicate(s)`);
+    if (giantAssets.length > 0) detailsArr.push(`${giantAssets.length} giant asset(s)`);
+    if (warningCount > 0) detailsArr.push(`${warningCount} warning(s)`);
+    flabDetails += `Found ${detailsArr.join(' & ')}.`;
   }
 
-  let cacheDetails = '';
-  if (duration1 < 1000) {
-    cacheDetails = `Duration: < 1.0s.`;
+  let cacheDuration = duration1 < 1000 ? '< 1.0s' : `${(duration1 / 1000).toFixed(1)}s (jitter: ${jitterPercent}%)`;
+  let cacheDetails = `Duration: ${cacheDuration}. `;
+  if (!lockfileMutated && report.hasCaching) {
+    cacheDetails += '0 lockfile mutations. Caching active.';
   } else {
-    cacheDetails = `Duration: ${(duration1 / 1000).toFixed(1)}s (jitter: ${jitterPercent}%).`;
-  }
-  if (lockfileMutated) {
-    cacheDetails += ' ⚠️ Lockfile mutated!';
-  } else if (!report.hasCaching) {
-    cacheDetails += ' ❌ Caching disabled.';
-  } else {
-    cacheDetails += ' ✅ Caching enabled.';
+    let detailsArr = [];
+    if (lockfileMutated) detailsArr.push('⚠️ lockfile mutated');
+    if (!report.hasCaching) detailsArr.push('❌ caching disabled');
+    cacheDetails += `${detailsArr.join(' & ')}.`;
   }
 
   const roast = getWittyRoast(report);
