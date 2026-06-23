@@ -182,7 +182,7 @@ function findPrecedingStepCommand(workspaceDir) {
 
           for (let idx = 0; idx < steps.length; idx++) {
             const step = steps[idx];
-            if (step.uses && (step.uses.includes('ci-roast') || step.uses.includes('roast-my-build'))) {
+            if (step.uses && (step.uses.includes('ci-roast') || step.uses.includes('roast-my-build') || step.uses === './' || step.uses.startsWith('./'))) {
               if (idx > 0 && steps[idx - 1].run) {
                 return steps[idx - 1].run;
               }
