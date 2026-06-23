@@ -1,6 +1,7 @@
 name: "🔥 Dogfood CI Fitness Test"
 
 on:
+  push:
   pull_request:
     branches: [ main ]
   workflow_dispatch:
