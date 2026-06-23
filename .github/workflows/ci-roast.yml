@@ -1,13 +1,14 @@
-name: "🔥 Dogfood CI Fitness Test"
+name: "🔥 Roast my Build"
 
 on:
   push:
+    branches: [ main ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
 
 jobs:
-  roast-self:
+  roast:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -16,15 +17,16 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: 'lts/*'
+          cache: 'npm'
 
-      - name: Run Build Step (Mock)
-        run: |
-          mkdir -p dist
-          echo "// Mock build generated output" > dist/bundle.js
-          echo "console.log('Build Timestamp: $(date)');" >> dist/bundle.js
+      - name: Install Dependencies
+        run: npm ci
 
-      - name: 🔥 Run Fitness Audit
-        uses: ./
+      - name: Build Application
+        run: npm run build
+
+      - name: 🔥 Run Roast my Build
+        uses: aaronbronow/roast-my-build@v0.1.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
