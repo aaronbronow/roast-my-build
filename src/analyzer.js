@@ -498,7 +498,8 @@ function analyzeBuilds(dir1, dir2, workspaceDir, rawParams = {}) {
   const flabGrade = getGrade(flabScore);
 
   // 3. Caching Score Calculation
-  let cacheScore = hasCaching ? 95 : 40;
+  const isTooFastToCache = duration1 < 2000;
+  let cacheScore = (hasCaching || isTooFastToCache) ? 95 : 40;
   if (lockfileMutated) {
     cacheScore -= 25; // penalize 25 points for mutating package-lock
   }
@@ -583,8 +584,21 @@ function renderPRComment(report) {
   md += `| 🖼️ **Giant Media Assets** | ${giantAssets.length === 0 ? '🟢 Optimized' : '🍔 Plump'} | ${giantAssets.length === 0 ? 'All media assets and images are under 500KB.' : `Found ${giantAssets.length} uncompressed assets exceeding 500KB.`} |\n`;
   md += `| ⚠️ **Compile-Time Warnings** | ${warningCount === 0 ? '🟢 Clean' : '⚠️ Warning'} | ${warningCount === 0 ? '0 warnings found in build compilation logs.' : `Build logs output ${warningCount} compiler warning(s).`} |\n`;
   md += `| 🔒 **Lockfile Mutations** | ${!lockfileMutated ? '🟢 Sterile' : '⚠️ Mutated'} | ${!lockfileMutated ? 'package-lock.json was not modified during compiling.' : 'package-lock.json was mutated during the build step!'} |\n`;
-  md += `| 🏃 **Action Step Caching** | ${report.hasCaching ? '🟢 Cached' : '❌ Uncached'} | ${report.hasCaching ? 'Dependency caching active in workflow configurations.' : 'Workflow does not cache node_modules or dependency locks.'} |\n`;
-  md += `| ⏱️ **Build Speed Stability** | ${jitterPercent <= 25 ? '🟢 Stable' : '⚠️ Erratic'} | ${duration1 < 1000 ? 'Execution time is sub-second (no jitter measured).' : `Build variance is ${jitterPercent}% (Standard: ${(duration1/1000).toFixed(1)}s vs Shifted: ${(duration2/1000).toFixed(1)}s).`} |\n\n`;
+  let cachingStatus = '';
+  let cachingDetails = '';
+  if (report.hasCaching) {
+    cachingStatus = '🟢 Cached';
+    cachingDetails = 'Dependency caching active in workflow configurations.';
+  } else if (duration1 < 2000) {
+    cachingStatus = '🟢 Bypassed';
+    cachingDetails = 'Caching not required (build is extremely fast: < 2.0s).';
+  } else {
+    cachingStatus = '❌ Uncached';
+    cachingDetails = 'Workflow does not cache node_modules or dependency locks.';
+  }
+  md += `| 🏃 **Action Step Caching** | ${cachingStatus} | ${cachingDetails} |\n`;
+  const speedStatus = (jitterPercent <= 25 || duration1 < 1000) ? '🟢 Stable' : '⚠️ Erratic';
+  md += `| ⏱️ **Build Speed Stability** | ${speedStatus} | ${duration1 < 1000 ? 'Execution time is sub-second (no jitter measured).' : `Build variance is ${jitterPercent}% (Standard: ${(duration1/1000).toFixed(1)}s vs Shifted: ${(duration2/1000).toFixed(1)}s).`} |\n\n`;
   
   md += `<details>\n`;
   md += `<summary><b>🔍 Expand Fitness Breakdown & Diagnostics</b></summary>\n\n`;
