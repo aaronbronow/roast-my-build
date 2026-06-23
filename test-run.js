@@ -12,6 +12,19 @@ console.log('Setting up mock build folders...');
 fs.mkdirSync(dir1, { recursive: true });
 fs.mkdirSync(dir2, { recursive: true });
 
+// Setup mock workflows for checking version pinning
+const workflowsDir = path.join(tmpDir, '.github', 'workflows');
+fs.mkdirSync(workflowsDir, { recursive: true });
+fs.writeFileSync(path.join(workflowsDir, 'ci.yml'), `
+name: Build Pipeline
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: node:latest
+`);
+
 // 1. Identical text file
 fs.writeFileSync(path.join(dir1, 'same.txt'), 'This file is identical.');
 fs.writeFileSync(path.join(dir2, 'same.txt'), 'This file is identical.');
@@ -72,7 +85,10 @@ const mockParams = {
   duration2: 6000,  // 6.0 seconds (33.3% jitter)
   lockfileMutated: true,
   buildEnv: {
-    OPENAI_API_KEY: 'sk-proj-mock123key'
+    OPENAI_API_KEY: 'sk-proj-mock123key',
+    GITHUB_ACTIONS: 'true',
+    ImageVersion: '20240602.1.0',
+    ImageOS: 'ubuntu22'
   },
   buildLog: `
     npm run build

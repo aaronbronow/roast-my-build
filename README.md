@@ -30,6 +30,22 @@ It runs a read-only step after your existing build step that analyzes logs and r
 
 ---
 
+## Supported Metrics
+
+* **File Volatility**: Checks if files change unexpectedly between back-to-back compile runs.
+* **Absolute Path Leakage**: Scans for hardcoded absolute workspace paths baked into production assets.
+* **Credentials & Secrets**: Audits production assets for leaked API keys, tokens, and credentials.
+* **Duplicate Dependencies**: Checks package lockfiles for duplicate dependency versions.
+* **Giant Media Assets**: Flags uncompressed images or media assets exceeding 500KB.
+* **Compile-Time Warnings**: Counts compilation warnings and deprecation notices in build logs.
+* **Lockfile Mutations**: Checks if `package-lock.json` is mutated during compiling.
+* **Action Step Caching**: Verifies if dependency caching is active in workflow configurations.
+* **Consulting the Oracle**: Scans logs and env vars for compile-time calls to known LLM APIs (OpenAI, Gemini, Anthropic, etc.).
+* **Runner Pedigree**: Analyzes the build runner type, image staleness (age), and version pinning.
+* **Build Speed Stability**: Measures duration jitter and performance variance between runs.
+
+---
+
 ## Configuration Options
 
 | Input | Description | Default |

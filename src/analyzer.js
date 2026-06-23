@@ -320,6 +320,177 @@ function checkOracleConsultation(buildLog, env = {}) {
   return consulted;
 }
 
+function checkRunnerStaleness(env = {}, workspaceDir = '') {
+  const result = {
+    imageAgeDays: null,
+    isStale: false,
+    imageDateStr: '',
+    pinningStatus: 'Unknown',
+    pinningDetails: 'Unable to scan workflow files.'
+  };
+
+  // 1. Calculate age from ImageVersion (format: YYYYMMDD.N.R)
+  const imageVersion = env.ImageVersion || '';
+  if (imageVersion) {
+    const match = imageVersion.match(/^(\d{4})(\d{2})(\d{2})/);
+    if (match) {
+      const year = parseInt(match[1], 10);
+      const month = parseInt(match[2], 10) - 1;
+      const day = parseInt(match[3], 10);
+      const imageDate = new Date(year, month, day);
+      const currentDate = new Date();
+      const diffMs = currentDate.getTime() - imageDate.getTime();
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      
+      result.imageAgeDays = diffDays;
+      result.imageDateStr = `${year}-${match[2]}-${match[3]}`;
+      
+      // Consider a runner image stale if it is older than 180 days (6 months)
+      if (diffDays > 180) {
+        result.isStale = true;
+      }
+    }
+  }
+
+  // 2. Scan workflow files for floating runner versions and unpinned container tags
+  try {
+    const workflowsDir = path.join(workspaceDir, '.github', 'workflows');
+    if (fs.existsSync(workflowsDir)) {
+      const files = fs.readdirSync(workflowsDir);
+      let foundUnpinnedLatest = false;
+      let foundRunsOnLatest = false;
+      let foundContainerTag = false;
+      
+      for (const file of files) {
+        if (file.endsWith('.yml') || file.endsWith('.yaml')) {
+          const content = fs.readFileSync(path.join(workflowsDir, file), 'utf8');
+          
+          if (/runs-on:\s*['"]?[a-zA-Z0-9_-]+-latest['"]?/i.test(content)) {
+            foundRunsOnLatest = true;
+          }
+          
+          const containerMatches = content.match(/container:\s*(?:image:\s*)?['"]?([^\s'"]+)['"]?/gi);
+          if (containerMatches) {
+            for (const matchStr of containerMatches) {
+              const parts = matchStr.split(':');
+              const imageName = parts.slice(1).join(':').trim();
+              if (imageName.endsWith('latest') || (!imageName.includes(':') && !imageName.includes('@'))) {
+                foundUnpinnedLatest = true;
+              } else {
+                foundContainerTag = true;
+              }
+            }
+          }
+        }
+      }
+
+      if (foundUnpinnedLatest) {
+        result.pinningStatus = '❌ Unpinned Container';
+        result.pinningDetails = 'Workflow uses mutable container tags (e.g. ":latest"), which degrades reproducibility.';
+      } else if (foundRunsOnLatest) {
+        result.pinningStatus = '⚠️ Floating Runner';
+        result.pinningDetails = 'Workflow runs on floating runner tags (e.g. "ubuntu-latest"). High risk of unexpected compiler shifts.';
+      } else {
+        result.pinningStatus = '🟢 Pinned';
+        result.pinningDetails = 'Workflow runner/container image references are pinned to specific versions.';
+      }
+    }
+  } catch (e) {
+    // Ignore workflow scanning errors
+  }
+
+  return result;
+}
+
+function detectRunnerEnvironment(env = {}, workspaceDir = '') {
+  const staleness = checkRunnerStaleness(env, workspaceDir);
+
+  if (!env.GITHUB_ACTIONS) {
+    return {
+      type: 'Local Workstation',
+      details: 'Executed outside of GitHub Actions environment.',
+      status: '🟢 Local',
+      staleness
+    };
+  }
+
+  const isSelfHosted = env.RUNNER_ENVIRONMENT === 'self-hosted' || 
+                       (env.RUNNER_NAME && env.RUNNER_NAME.toLowerCase().includes('self'));
+  
+  let hasDockerEnv = false;
+  try {
+    hasDockerEnv = fs.existsSync('/.dockerenv') || 
+                   (fs.existsSync('/proc/1/cgroup') && fs.readFileSync('/proc/1/cgroup', 'utf8').includes('docker'));
+  } catch (e) {
+    // Ignore proc reading permission errors
+  }
+
+  const imageOS = env.ImageOS || '';
+  const imageVersion = env.ImageVersion || '';
+  
+  let detailSuffix = '';
+  if (staleness.imageAgeDays !== null) {
+    detailSuffix += ` Image age: ${staleness.imageAgeDays} days (${staleness.isStale ? '⚠️ Stale' : '🟢 Fresh'}).`;
+  }
+  if (staleness.pinningStatus !== 'Unknown') {
+    detailSuffix += ` Pinning: ${staleness.pinningStatus}.`;
+  }
+  
+  if (isSelfHosted) {
+    return {
+      type: 'Self-Hosted Runner',
+      details: `Custom runner (${env.RUNNER_NAME || 'Unnamed'}). Prone to persistent state caching.${detailSuffix}`,
+      status: '⚠️ Self-Hosted',
+      staleness
+    };
+  }
+
+  if (imageOS && imageVersion) {
+    return {
+      type: `GitHub-Hosted (${imageOS})`,
+      details: `Standard GitHub runner image (v${imageVersion}) with pre-installed tools.${detailSuffix}`,
+      status: staleness.isStale ? '⚠️ Stale Image' : '🟢 GitHub-Hosted',
+      staleness
+    };
+  }
+
+  if (hasDockerEnv) {
+    let containerType = 'Docker Hardened Container';
+    let details = 'Isolated, clean, reproducible container environment.';
+    
+    try {
+      if (fs.existsSync('/etc/os-release')) {
+        const osRelease = fs.readFileSync('/etc/os-release', 'utf8').toLowerCase();
+        if (osRelease.includes('alpine')) {
+          containerType = 'Alpine Container';
+          details = 'Ultra-lean Alpine Linux container. Zero pre-installed tooling bloat.';
+        } else if (osRelease.includes('ubuntu')) {
+          containerType = 'Ubuntu Container';
+          details = 'Clean Ubuntu containerized workspace.';
+        } else if (osRelease.includes('debian')) {
+          containerType = 'Debian Container';
+          details = 'Clean Debian containerized workspace.';
+        }
+      }
+    } catch (e) {
+      // Ignore reading os-release errors
+    }
+    return {
+      type: containerType,
+      details: `${details}${detailSuffix}`,
+      status: staleness.isStale ? '⚠️ Stale Container' : '🟢 Hardened',
+      staleness
+    };
+  }
+
+  return {
+    type: 'Generic Runner',
+    details: `Generic runner running on ${env.RUNNER_OS || 'Unknown OS'} (${env.RUNNER_ARCH || 'Unknown Arch'}).${detailSuffix}`,
+    status: '🟢 Generic',
+    staleness
+  };
+}
+
 /**
  * Map numerical score to letter grade.
  * @param {number} score 
@@ -497,6 +668,7 @@ function analyzeBuilds(dir1, dir2, workspaceDir, rawParams = {}) {
   const warningCount = countWarnings(buildLog);
   const buildEnv = rawParams.buildEnv || {};
   const consultedLLMs = checkOracleConsultation(buildLog, buildEnv);
+  const runnerEnv = detectRunnerEnvironment(buildEnv, workspaceDir);
 
   // Compute Build Speed Jitter
   const jitterMs = Math.abs(duration1 - duration2);
@@ -560,6 +732,7 @@ function analyzeBuilds(dir1, dir2, workspaceDir, rawParams = {}) {
     lockfileMutated,
     consultedLLMs,
     consultedLLMsCount: consultedLLMs.length,
+    runnerEnv,
     determinismScore,
     determinismGrade,
     flabScore,
@@ -587,6 +760,7 @@ function renderPRComment(report) {
     giantAssets,
     lockfileMutated,
     consultedLLMs,
+    runnerEnv,
     determinismGrade,
     flabGrade,
     cacheGrade,
@@ -635,6 +809,8 @@ function renderPRComment(report) {
   }
   md += `| 🏃 **Action Step Caching** | ${cachingStatus} | ${cachingDetails} |\n`;
   md += `| 🔮 **Consulting the Oracle** | ${consultedLLMs.length === 0 ? '🟢 Independent' : '⚠️ Consulted'} | ${consultedLLMs.length === 0 ? 'Build did not consult any known LLM APIs.' : `Queried LLM APIs (${consultedLLMs.join(', ')}) during compilation!`} |\n`;
+  const runnerEnvObj = runnerEnv || { type: 'Unknown', details: 'Unable to detect runner type.', status: '⚠️ Unknown' };
+  md += `| 🧬 **Runner Pedigree** | ${runnerEnvObj.status} | ${runnerEnvObj.type}: ${runnerEnvObj.details} |\n`;
   const speedStatus = (jitterPercent <= 25 || duration1 < 1000) ? '🟢 Stable' : '⚠️ Erratic';
   md += `| ⏱️ **Build Speed Stability** | ${speedStatus} | ${duration1 < 1000 ? 'Execution time is sub-second (no jitter measured).' : `Build variance is ${jitterPercent}% (Standard: ${(duration1/1000).toFixed(1)}s vs Shifted: ${(duration2/1000).toFixed(1)}s).`} |\n\n`;
   
