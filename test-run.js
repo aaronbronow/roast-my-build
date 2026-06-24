@@ -25,6 +25,35 @@ jobs:
       image: node:latest
 `);
 
+fs.writeFileSync(path.join(workflowsDir, 'vulnerable-pr.yml'), `
+name: PR Builder
+on:
+  pull_request_target:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Unsafe Code
+        uses: actions/checkout@v4
+        with:
+          ref: \$\{\{ github.event.pull_request.head.sha \}\}
+`);
+
+fs.writeFileSync(path.join(workflowsDir, 'bypassed-pr.yml'), `
+name: Bypassed PR Builder
+on:
+  pull_request_target:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Unsafe Code
+        uses: actions/checkout@v7
+        with:
+          ref: \$\{\{ github.event.pull_request.head.sha \}\}
+          allow-unsafe-pr-checkout: true
+`);
+
 // 1. Identical text file
 fs.writeFileSync(path.join(dir1, 'same.txt'), 'This file is identical.');
 fs.writeFileSync(path.join(dir2, 'same.txt'), 'This file is identical.');

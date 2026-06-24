@@ -402,6 +402,64 @@ function checkRunnerStaleness(env = {}, workspaceDir = '') {
   return result;
 }
 
+function checkPwnRequestRisk(workspaceDir = '') {
+  const result = {
+    isVulnerable: false,
+    details: 'No unsafe pull_request_target checkouts detected.',
+    status: '🟢 Secure',
+    exposedWorkflows: [],
+    bypassedWorkflows: []
+  };
+
+  try {
+    const workflowsDir = path.join(workspaceDir, '.github', 'workflows');
+    if (fs.existsSync(workflowsDir)) {
+      const files = fs.readdirSync(workflowsDir);
+      for (const file of files) {
+        if (file.endsWith('.yml') || file.endsWith('.yaml')) {
+          const content = fs.readFileSync(path.join(workflowsDir, file), 'utf8');
+          
+          const hasUnsafeTrigger = content.includes('pull_request_target:') || content.includes('workflow_run:');
+          if (!hasUnsafeTrigger) continue;
+
+          if (!content.includes('actions/checkout')) continue;
+
+          const hasUnsafeRef = /ref:\s*['"]?\$\{\{\s*github\.event\.pull_request\.head\.(?:sha|ref)\s*\}\}['"]?/i.test(content) ||
+                               /repository:\s*['"]?\$\{\{\s*github\.event\.pull_request\.head\.repo\.full_name\s*\}\}['"]?/i.test(content);
+          
+          const hasUnsafeCheckoutAllowed = content.includes('allow-unsafe-pr-checkout: true') || content.includes('allow-unsafe-pr-checkout: "true"');
+
+          if (hasUnsafeRef) {
+            result.isVulnerable = true;
+            if (hasUnsafeCheckoutAllowed) {
+              result.bypassedWorkflows.push(file);
+            } else {
+              result.exposedWorkflows.push(file);
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // Ignore scan errors
+  }
+
+  if (result.isVulnerable) {
+    if (result.bypassedWorkflows.length > 0 && result.exposedWorkflows.length > 0) {
+      result.status = '🚨 Exposed';
+      result.details = `Unsafe checkouts found. Exposed: ${result.exposedWorkflows.join(', ')} (blocks on checkout v7+). Bypassed: ${result.bypassedWorkflows.join(', ')} (safety override active).`;
+    } else if (result.exposedWorkflows.length > 0) {
+      result.status = '🚨 Exposed';
+      result.details = `Unsafe checkout of unreviewed fork code inside privileged triggers: ${result.exposedWorkflows.join(', ')}. Will block on actions/checkout v7+; vulnerable on older versions.`;
+    } else {
+      result.status = '🚨 Bypassed';
+      result.details = `Insecure checkout bypasses ('allow-unsafe-pr-checkout: true') found in: ${result.bypassedWorkflows.join(', ')}. Exposes repository secrets to fork code.`;
+    }
+  }
+
+  return result;
+}
+
 function detectRunnerEnvironment(env = {}, workspaceDir = '') {
   const staleness = checkRunnerStaleness(env, workspaceDir);
 
@@ -515,7 +573,7 @@ function getWittyRoast(results) {
     duplicatesCount, sourcemapsFound, hasCaching, 
     leakedPathsCount, leakedSecretsCount, warningCount, 
     lockfileMutated, jitterPercent, giantAssetsCount,
-    consultedLLMsCount
+    consultedLLMsCount, hasPwnRequestRisk
   } = results;
   
   const determinismRoasts = {
@@ -569,6 +627,9 @@ function getWittyRoast(results) {
   }
   if (consultedLLMsCount > 0) {
     specificPunches.push(`Consulting the Oracle during compilation? What happens when Gemini starts hallucinating your CSS layout or OpenAI goes down mid-pipeline?`);
+  }
+  if (hasPwnRequestRisk) {
+    specificPunches.push("Exposed pull_request_target checkout configuration detected. Thanks for leaving the backdoor keys under the doormat for any script kiddie to pwn your repository secrets!");
   }
 
   const baseRoast = `${determinismRoasts[determinismGrade]} ${flabRoasts[flabGrade]} ${cacheRoasts[cacheGrade]}`;
@@ -669,6 +730,7 @@ function analyzeBuilds(dir1, dir2, workspaceDir, rawParams = {}) {
   const buildEnv = rawParams.buildEnv || {};
   const consultedLLMs = checkOracleConsultation(buildLog, buildEnv);
   const runnerEnv = detectRunnerEnvironment(buildEnv, workspaceDir);
+  const pwnRequestRisk = checkPwnRequestRisk(workspaceDir);
 
   // Compute Build Speed Jitter
   const jitterMs = Math.abs(duration1 - duration2);
@@ -683,6 +745,9 @@ function analyzeBuilds(dir1, dir2, workspaceDir, rawParams = {}) {
   determinismScore -= (leakedSecrets.length * 20); // penalize 20 points per leaked credential file
   if (consultedLLMs.length > 0) {
     determinismScore -= 15; // penalize 15 points if they query LLMs during compile
+  }
+  if (pwnRequestRisk.isVulnerable) {
+    determinismScore -= 20; // penalize 20 points for insecure pull_request_target checkout
   }
   if (determinismScore < 0) determinismScore = 0;
   const determinismGrade = getGrade(determinismScore);
@@ -733,6 +798,8 @@ function analyzeBuilds(dir1, dir2, workspaceDir, rawParams = {}) {
     consultedLLMs,
     consultedLLMsCount: consultedLLMs.length,
     runnerEnv,
+    pwnRequestRisk,
+    hasPwnRequestRisk: pwnRequestRisk.isVulnerable,
     determinismScore,
     determinismGrade,
     flabScore,
@@ -761,6 +828,7 @@ function renderPRComment(report) {
     lockfileMutated,
     consultedLLMs,
     runnerEnv,
+    pwnRequestRisk,
     determinismGrade,
     flabGrade,
     cacheGrade,
@@ -811,6 +879,8 @@ function renderPRComment(report) {
   md += `| 🔮 **Consulting the Oracle** | ${consultedLLMs.length === 0 ? '🟢 Independent' : '⚠️ Consulted'} | ${consultedLLMs.length === 0 ? 'Build did not consult any known LLM APIs.' : `Queried LLM APIs (${consultedLLMs.join(', ')}) during compilation!`} |\n`;
   const runnerEnvObj = runnerEnv || { type: 'Unknown', details: 'Unable to detect runner type.', status: '⚠️ Unknown' };
   md += `| 🧬 **Runner Pedigree** | ${runnerEnvObj.status} | ${runnerEnvObj.type}: ${runnerEnvObj.details} |\n`;
+  const pwnRisk = pwnRequestRisk || { isVulnerable: false, status: '🟢 Secure', details: 'No unsafe pull_request_target checkouts detected.' };
+  md += `| 🛡️ **PR Target Security** | ${pwnRisk.status} | ${pwnRisk.details} |\n`;
   const speedStatus = (jitterPercent <= 25 || duration1 < 1000) ? '🟢 Stable' : '⚠️ Erratic';
   md += `| ⏱️ **Build Speed Stability** | ${speedStatus} | ${duration1 < 1000 ? 'Execution time is sub-second (no jitter measured).' : `Build variance is ${jitterPercent}% (Standard: ${(duration1/1000).toFixed(1)}s vs Shifted: ${(duration2/1000).toFixed(1)}s).`} |\n\n`;
   

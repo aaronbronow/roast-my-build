@@ -35,6 +35,7 @@ It runs a read-only step after your existing build step that analyzes logs and r
 * **File Volatility**: Checks if files change unexpectedly between back-to-back compile runs.
 * **Absolute Path Leakage**: Scans for hardcoded absolute workspace paths baked into production assets.
 * **Credentials & Secrets**: Audits production assets for leaked API keys, tokens, and credentials.
+* **PR Target Security**: Audits workflow configurations for insecure checkouts of untrusted fork code in privileged triggers (preventing "pwn request" vulnerabilities).
 * **Duplicate Dependencies**: Checks package lockfiles for duplicate dependency versions.
 * **Giant Media Assets**: Flags uncompressed images or media assets exceeding 500KB.
 * **Compile-Time Warnings**: Counts compilation warnings and deprecation notices in build logs.
